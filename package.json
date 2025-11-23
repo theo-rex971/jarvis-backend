@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-backend",
+  "version": "1.0.0",
+  "description": "Backend Jarvis pour connecter ChatGPT et n8n",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0"
+  }
+}
