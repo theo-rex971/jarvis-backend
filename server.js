@@ -28,16 +28,26 @@ app.get("/health", (req, res) => {
 
 /**
  * Route principale Jarvis
- * Tu lui envoies un JSON du style :
+ * Format attendu côté ChatGPT (mode JARVIS) :
+ * {
+ *   "jarvis_action": "run_n8n_workflow",
+ *   "payload": { ... }
+ * }
+ *
+ * On garde aussi la compatibilité avec :
  * {
  *   "action": "run_n8n_workflow",
- *   "payload": { ... n'importe quelles données ... }
+ *   "payload": { ... }
  * }
  */
 app.post("/jarvis", async (req, res) => {
   const body = req.body || {};
-  const action = body.action;
+
+  // On accepte soit "jarvis_action", soit "action"
+  const action = body.jarvis_action || body.action;
   const payload = body.payload || {};
+
+  console.log("Requête reçue sur /jarvis :", body);
 
   if (!action) {
     return res.status(400).json({ error: "Aucune action fournie." });
