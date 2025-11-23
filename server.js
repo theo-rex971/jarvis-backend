@@ -1,5 +1,5 @@
 // server.js
-// Backend "Jarvis" : Express + Telegram + OpenAI + n8n (prêt)
+// Backend "Jarvis" en Node + Express
 
 const express = require("express");
 const app = express();
@@ -7,13 +7,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Variables d'environnement
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-
-const TELEGRAM_API = TELEGRAM_BOT_TOKEN
-  ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`
-  : null;
 
 // Middlewares
 app.use(express.json());
@@ -28,16 +24,62 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     message: "Jarvis backend fonctionne",
+    hasN8NWebhook: Boolean(N8N_WEBHOOK_URL),
+    hasOpenAIKey: Boolean(OPENAI_API_KEY),
+    hasTelegramToken: Boolean(TELEGRAM_BOT_TOKEN),
     timestamp: new Date().toISOString(),
   });
 });
 
 /**
- * Route /jarvis : passerelle vers n8n
- * Attend un body :
+ * Petite fonction utilitaire : appel à OpenAI
+ */
+async function askOpenAI(userText) {
+  if (!OPENAI_API_KEY) {
+    return "Je n'ai pas de clé OpenAI configurée dans le backend.";
+  }
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Tu es Jarvis, l'assistant growth hacker de Théo Rex. Tu réponds en français, de manière claire, synthétique et actionnable.",
+          },
+          {
+            role: "user",
+            content: userText,
+          },
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    const reply =
+      data?.choices?.[0]?.message?.content ||
+      "Je n'ai pas réussi à générer une réponse (aucun contenu retourné).";
+
+    return reply;
+  } catch (error) {
+    console.error("Erreur OpenAI :", error);
+    return "Erreur lors de l'appel à OpenAI.";
+  }
+}
+
+/**
+ * Route principale Jarvis (pour n8n ou autres clients HTTP)
+ * Tu lui envoies un JSON du style :
  * {
  *   "action": "run_n8n_workflow",
- *   "payload": { ... }
+ *   "payload": { ... n'importe quelles données ... }
  * }
  */
 app.post("/jarvis", async (req, res) => {
@@ -49,7 +91,7 @@ app.post("/jarvis", async (req, res) => {
     return res.status(400).json({ error: "Aucune action fournie." });
   }
 
-  // Cas : lancer un workflow n8n
+  // 1) Cas : on veut lancer un workflow n8n
   if (action === "run_n8n_workflow") {
     if (!N8N_WEBHOOK_URL) {
       return res
@@ -82,7 +124,7 @@ app.post("/jarvis", async (req, res) => {
     }
   }
 
-  // Action inconnue
+  // 2) Action inconnue
   return res.status(400).json({
     error: "Action inconnue.",
     receivedAction: action,
@@ -91,103 +133,54 @@ app.post("/jarvis", async (req, res) => {
 });
 
 /**
- * Route webhook Telegram
- * Télégram envoie ici tous les messages reçus par ton bot.
+ * Webhook Telegram : Telegram envoie les messages ici
  */
 app.post("/telegram-webhook", async (req, res) => {
-  // Telegram s'attend juste à un 200 rapide
-  res.sendStatus(200);
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error("TELEGRAM_BOT_TOKEN manquant.");
+    return res.sendStatus(500);
+  }
 
+  const update = req.body;
+
+  // On récupère le message texte (message normal ou édité)
+  const message = update.message || update.edited_message;
+  if (!message || !message.text) {
+    // Rien à traiter (stickers, images, etc.)
+    return res.sendStatus(200);
+  }
+
+  const chatId = message.chat.id;
+  const userText = message.text;
+
+  console.log("Message reçu depuis Telegram :", userText);
+
+  // Appel à OpenAI pour générer une réponse
+  const replyText = await askOpenAI(userText);
+
+  // Envoi de la réponse vers Telegram
   try {
-    if (!TELEGRAM_API) {
-      console.error("TELEGRAM_BOT_TOKEN manquant.");
-      return;
-    }
-
-    const update = req.body;
-
-    // On ne gère que les messages texte pour l'instant
-    const message = update.message;
-    if (!message || !message.text) {
-      return;
-    }
-
-    const chatId = message.chat.id;
-    const userText = message.text.trim();
-
-    console.log("Message Telegram reçu:", userText);
-
-    // Si pas de clé OpenAI, on répond un message d'erreur
-    if (!OPENAI_API_KEY) {
-      await sendTelegramMessage(
-        chatId,
-        "⚠️ OPENAI_API_KEY n'est pas configurée sur le serveur."
-      );
-      return;
-    }
-
-    // Appel à l'API OpenAI pour générer la réponse de Jarvis
-    const openAiResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
+    await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
         },
         body: JSON.stringify({
-          model: "gpt-4.1-mini",
-          temperature: 0.3,
-          messages: [
-            {
-              role: "system",
-              content:
-                "Tu es Jarvis, l'assistant growth hacker de Théo Rex. " +
-                "Réponds de manière claire, actionnable et moderne. " +
-                "Tu peux proposer des idées de workflows n8n, mais pour l'instant tu ne les exécutes pas automatiquement.",
-            },
-            {
-              role: "user",
-              content: userText,
-            },
-          ],
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: "Markdown",
         }),
       }
     );
-
-    const data = await openAiResponse.json();
-    const replyText =
-      data?.choices?.[0]?.message?.content ||
-      "Désolé, je n'ai pas réussi à générer de réponse.";
-
-    await sendTelegramMessage(chatId, replyText);
-  } catch (err) {
-    console.error("Erreur dans /telegram-webhook:", err.message);
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de la réponse Telegram :", error);
   }
+
+  // Toujours répondre 200 à Telegram, même si on a eu une erreur après
+  res.sendStatus(200);
 });
-
-/**
- * Fonction utilitaire : envoyer un message à Telegram
- */
-async function sendTelegramMessage(chatId, text) {
-  if (!TELEGRAM_API) return;
-
-  try {
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "Markdown",
-      }),
-    });
-  } catch (err) {
-    console.error("Erreur lors de l'envoi du message Telegram:", err.message);
-  }
-}
 
 // Lancement du serveur
 app.listen(PORT, () => {
