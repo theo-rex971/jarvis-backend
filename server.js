@@ -1,245 +1,197 @@
-// server.js
-// Backend "Jarvis" : Telegram + Orchestrateur OpenAI + n8n
+// --------------------------------------------------------------
+// Jarvis Backend — Telegram -> Orchestrateur -> n8n
+// --------------------------------------------------------------
 
-const express = require("express");
+import express from "express";
+import fetch from "node-fetch";
+
 const app = express();
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// 🔑 Variables d'environnement
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
+// --------------------------------------------------------------
+// VARIABLES SECRETES
+// --------------------------------------------------------------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 
-if (!OPENAI_API_KEY) {
-  console.warn("⚠️ OPENAI_API_KEY n'est pas configurée !");
-}
-if (!TELEGRAM_BOT_TOKEN) {
-  console.warn("⚠️ TELEGRAM_BOT_TOKEN n'est pas configuré !");
-}
-if (!N8N_WEBHOOK_URL) {
-  console.warn("⚠️ N8N_WEBHOOK_URL n'est pas configurée !");
-}
+if (!OPENAI_API_KEY) console.warn("⚠️ OPENAI_API_KEY manquante");
+if (!TELEGRAM_BOT_TOKEN) console.warn("⚠️ TELEGRAM_BOT_TOKEN manquant");
+if (!N8N_WEBHOOK_URL) console.warn("⚠️ N8N_WEBHOOK_URL manquante");
 
-// Middlewares
-app.use(express.json());
-
-// Route de test simple
-app.get("/", (req, res) => {
-  res.send("Jarvis backend est en ligne ✅");
-});
-
-// Route de santé
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Jarvis backend fonctionne",
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// 🧩 Helper : envoyer un message à Telegram
-async function sendTelegramMessage(chatId, text) {
-  if (!TELEGRAM_BOT_TOKEN) {
-    console.error("TELEGRAM_BOT_TOKEN manquant, impossible de répondre.");
-    return;
-  }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-
-  const body = {
-    chat_id: chatId,
-    text,
-  };
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    console.error("Erreur sendMessage Telegram:", await response.text());
-  }
-}
-
-// 🧩 Helper : envoyer des données vers n8n
-async function sendToN8n(payload) {
-  if (!N8N_WEBHOOK_URL) {
-    console.warn("N8N_WEBHOOK_URL non défini, je ne peux pas appeler n8n.");
-    return;
-  }
-
-  try {
-    console.log("🚀 Envoi vers n8n :", N8N_WEBHOOK_URL);
-
-    const response = await fetch(N8N_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      console.error("❌ Réponse n8n non OK :", await response.text());
-    } else {
-      console.log("✅ Appel n8n réussi");
-    }
-  } catch (err) {
-    console.error("Erreur lors de l'envoi vers n8n:", err);
-  }
-}
-
-// 🧠 Orchestrateur : analyse le message et renvoie un JSON de tâches
+// --------------------------------------------------------------
+// HELPER OPENAI : ORCHESTRATEUR
+// --------------------------------------------------------------
 async function analyzeWithAgent(userMessage) {
   if (!OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY manquante pour l'orchestrateur.");
+    throw new Error("OPENAI_API_KEY manquante.");
   }
 
   const url = "https://api.openai.com/v1/chat/completions";
 
-
+  // ----------------------------------------------------------
+  // PROMPT ORCHESTRATEUR – VERSION COMPACTE & ROBUSTE
+  // ----------------------------------------------------------
   const systemPrompt = `
-const systemPrompt = `
-Tu es “Jarvis Orchestrateur”, l’IA maître de Théo Rex (consultant marketing, growth hacker, automatisation, contenu, ads, funnel, data, B2B/B2C, RenoRex & Rexcellence Consulting).
+Tu es "Jarvis Orchestrateur", l’IA maître de Théo Rex.
 
-OBJECTIF :
-Tu reçois un message libre via Telegram.  
-Tu dois analyser le besoin, comprendre le contexte, et produire un JSON propre que n8n utilisera pour activer des sous-agents.
+Contexte :
+- Théo est consultant en marketing digital, growth hacker et créateur de Rexcellence Consulting & RenoRex.
+- Il t’envoie des messages libres via Telegram (B2B, B2C, missions clients, projets internes).
+- Tu analyses tout via le funnel AARRR : acquisition, activation, rétention, referral, revenue.
 
-RÈGLES :
-- Analyse toujours via le modèle AARRR : acquisition, activation, rétention, referral, revenu.
-- Si infos manquent → mets null ou [].
-- Si demande floue → crée au moins : audit_360 + growth_strategy.
-- Retourne UNIQUEMENT un JSON valide. Jamais de texte hors JSON.
+Sous-agents disponibles :
+- audit_360 (audit complet business + funnel + concurrents)
+- growth_strategy (plan d’actions priorisé)
+- scraping (annuaire, webscraper.io, PagesJaunes, Societe.com… low-cost)
+- cold_email (scripts + séquences Lemlist-ready)
+- content (LinkedIn, Instagram, TikTok, YouTube, Pinterest, Facebook,
+           Google, Google Ads, landing pages, Canva, CapCut…)
+- funnel (pages, tunnel, onboarding, nurturing)
+- automation (n8n, Make, Zapier)
+- data_analysis (GTM, GA4, Meta Ads, conversions, tracking)
+- rag_memory (mémoire persistante via Supabase)
+- internal_question (clarification)
 
-SOUS-AGENTS DISPONIBLES :
-1) audit_360 → analyse complète (site, offre, persona, concurrents, AARRR, messages, canaux, prix, objections, opportunités).
-2) growth_strategy → stratégie globale (leviers, priorités, quickwins, ads, contenus, SEO, messages, conversions).
-3) scraping → LinkedIn (gratuit), Sales Navigator (si fourni), Webscraper.io, Pages Jaunes, Societe.com, annuaires, recherche Google ; enrichissement low cost : Dropcontact, Lemlist.
-4) cold_email → séquence courte (AIDA/PAS/BAB/5W2H), approches, angles, variables, CTA.
-5) content → posts (LinkedIn, Insta, Facebook, YouTube, TikTok, Pinterest, Google), scripts vidéo, carrousels, landing pages, ton : consultatif/premium/friendly/catchy.
-6) ads → Meta Ads, Google Ads, TikTok Ads, Pinterest Ads ; recommandations audiences, créas, événements clé.
-7) data_analysis → GA4, GTM, Meta Ads events : clics, conversions, tracking, anomalies.
-8) automation → n8n/Make/Zapier ; mapping input→output, triggers, séquences.
-9) rag_memory → stockage Supabase pour historique (id, project, entity_type, tags…).
+Tu renvoies TOUJOURS uniquement un JSON strict :
 
-FORMAT JSON À PRODUIRE :
 {
-  "natural_reply": "phrase courte destinée à Théo",
+  "natural_reply": "phrase courte friendly pour Théo",
   "company": {
     "name": "string|null",
-    "project": "rexcellence|renorex|autre|null",
+    "project": "rexcellence|renorex|autre",
     "industry": "string|null",
     "size": "freelance|tpe|pme|scaleup|corp|null",
-    "geo": "string|null"
+    "geo": "string|null",
+    "b2b_b2c": "b2b|b2c|both|null"
   },
-  "intent": "audit_360|growth_strategy|scraping|content|cold_email|ads|automation|data_analysis|rag_memory|internal_question",
+  "intent": "audit_360|growth_strategy|scraping|cold_email|content|funnel|automation|data_analysis|internal_question",
   "funnel_focus": ["acquisition","activation","retention","referral","revenue"],
   "tasks": [
     {
-      "agent_type": "audit_360|growth_strategy|scraping|content|cold_email|ads|automation|data_analysis|rag_memory",
-      "funnel_stage": "acquisition|activation|retention|referral|revenue|null",
+      "agent_type": "audit_360|growth_strategy|scraping|cold_email|content|funnel|automation|data_analysis|rag_memory|internal_question",
       "priority": 1,
-      "details": {
-        "persona": "string|null",
-        "topics": ["string"],
-        "problems": ["string"],
-        "channels": ["linkedin","instagram","facebook","youtube","tiktok","pinterest","google"],
-        "tone": "consultatif|premium|friendly|punchy|catchy|storytelling|null",
-        "competitors": ["https://..."],
-        "metrics_focus": ["cpc","cpa","ltv","closing_rate"],
-        "format": "post|carrousel|landing_page|video_script|null",
-        "enrichment": ["dropcontact","lemlist"],
-        "emails_count": 4
-      }
+      "goal": "string",
+      "details": {},
+      "funnel_stage": ["acquisition","activation","retention","referral","revenue"]
     }
-  ]
+  ],
+  "rag": {
+    "should_write": false,
+    "summary": "string|null",
+    "tags": ["rexcellence","audit_360"],
+    "table": "ai_memory"
+  }
 }
-`.trim();
 
+Règles :
+- Si un champ manque -> mets null ou liste vide.
+- Plusieurs tâches si besoin (ex : audit + scraping + contenu).
+- Ne renvoie rien d’autre que l’objet JSON.
+`.trim();
 
   const body = {
     model: "gpt-4o-mini",
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage || "" },
-    ],
+      { role: "user", content: userMessage || "" }
+    ]
   };
 
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
-    console.error("Erreur OpenAI orchestrateur:", await response.text());
-    throw new Error("Erreur lors de l'appel à l'orchestrateur.");
+    const msg = await response.text().catch(() => "");
+    console.error("Erreur OpenAI orchestrateur:", msg);
+    throw new Error("Echec de l'appel OpenAI");
   }
 
   const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content || "{}";
 
   let parsed;
   try {
-    parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}");
-  } catch (e) {
-    console.error("JSON orchestrateur invalide:", data);
-    throw new Error("Réponse JSON invalide de l'orchestrateur.");
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error("JSON non parseable:", raw);
+    throw err;
   }
 
-  return parsed; // { natural_reply, company, intent, funnel_focus, tasks: [...] }
+  return parsed;
 }
 
-// 🔔 Webhook Telegram : reçoit les messages et passe par l'orchestrateur
+// --------------------------------------------------------------
+// FONCTION : envoi Telegram
+// --------------------------------------------------------------
+async function sendTelegramMessage(chatId, text) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text })
+  });
+}
+
+// --------------------------------------------------------------
+// ROUTE TELEGRAM WEBHOOK
+// --------------------------------------------------------------
 app.post("/telegram-webhook", async (req, res) => {
   try {
     const update = req.body;
+    if (!update.message) return res.sendStatus(200);
 
-    if (!update || !update.message) {
-      return res.sendStatus(200);
-    }
+    const chatId = update.message.chat.id;
+    const text = update.message.text || "";
+    const firstName = update.message.from.first_name || "";
 
-    const message = update.message;
-    const chatId = message.chat.id;
-    const text = (message.text || "").trim();
-    const username = message.from?.username || "";
-    const firstName = message.from?.first_name || "";
-
-    console.log("📩 Message Telegram reçu:", { chatId, username, text });
-
-    // 1) Analyse via l'orchestrateur (OpenAI)
+    // 1) Analyse avec OpenAI
     const analysis = await analyzeWithAgent(text);
 
-    // 2) Réponse "humaine" pour toi dans Telegram
-    const naturalReply =
-      analysis.natural_reply ||
-      "C'est noté, je commence à analyser et à préparer les prochaines étapes.";
-    await sendTelegramMessage(chatId, naturalReply);
+    // 2) Réponse naturelle vers Telegram
+    await sendTelegramMessage(chatId, analysis.natural_reply);
 
-    // 3) Envoi vers n8n du JSON complet pour orchestration
-    await sendToN8n({
-      source: "telegram_orchestrator",
-      chatId,
-      username,
-      firstName,
-      userMessage: text,
-      analysis,
-      timestamp: new Date().toISOString(),
+    // 3) Envoi full JSON vers n8n
+    await fetch(N8N_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "telegram_orchestrator",
+        chatId,
+        firstName,
+        userMessage: text,
+        analysis
+      })
     });
 
-    res.status(200).json({ ok: true });
-  } catch (error) {
-    console.error("Erreur dans /telegram-webhook:", error);
-    // On répond quand même 200 à Telegram pour éviter des retries en boucle
-    res.status(200).json({ ok: false });
+    return res.status(200).json({ ok: true });
+
+  } catch (err) {
+    console.error("Erreur /telegram-webhook :", err);
+    return res.status(200).json({ ok: false });
   }
 });
 
-// Lancement du serveur
+// --------------------------------------------------------------
+// TEST : route GET
+// --------------------------------------------------------------
+app.get("/", (req, res) => {
+  res.send("Jarvis backend opérationnel ✔️");
+});
+
+// --------------------------------------------------------------
+// LANCEMENT
+// --------------------------------------------------------------
 app.listen(PORT, () => {
-  console.log(`Jarvis backend écoute sur le port ${PORT}`);
+  console.log("🚀 Serveur lancé sur le port " + PORT);
 });
