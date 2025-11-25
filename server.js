@@ -97,7 +97,7 @@ async function analyzeWithAgent(userMessage) {
 
   const url = "https://api.openai.com/v1/chat/completions";
 
-  // ⬇⬇⬇ ICI : PROMPT ORCHESTRATEUR (version compacte mais suffisante)
+
   const systemPrompt = `
 // 👇 PROMPT ORCHESTRATEUR – VERSION LONGUE, RÉCENTE, HYBRIDE B2B/B2C, AVEC RAG/SUPABASE
 const systemPrompt = `
